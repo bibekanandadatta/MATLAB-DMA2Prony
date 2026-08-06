@@ -30,18 +30,15 @@ allowPredictionExtrapolation        = false;
 
 % Start from complete defaults and change only the preferred presentation.
 plotOptions                         = dmaPlot('defaults');
-
 plotOptions.Scale                   = 'loglog';
 plotOptions.LineWidth               = 3;
 plotOptions.AxesLineWidth           = 1.0;
 plotOptions.FontName                = 'Latin Modern';
 plotOptions.AxisLabelFontSize       = 30;
 plotOptions.TickLabelFontSize       = 30;
-plotOptions.ColorbarFontSize        = 30;
 plotOptions.LegendFontSize          = 24;
-
-
 plotOptions.Interpreter             = 'latex';      % none, tex, or latex
+plotOptions.ColorbarFontSize        = 30;
 plotOptions.Box                     = 'on';
 plotOptions.Grid                    = 'on';
 plotOptions.MinorTicks              = 'on';
@@ -64,10 +61,10 @@ plotOptions.ShiftedLineWidth        = 5;
 plotOptions.ShiftedMarker           = 'none';
 plotOptions.ShiftedLegendLocation   = 'east';
 
-plotOptions.FilteredMarker          = '^';
+plotOptions.FilteredMarker          = 'o';
 plotOptions.FilteredMarkerSize      = 7;
 plotOptions.FilteredMarkerLineWidth = 2;
-plotOptions.MaxwellLineWidth        = 4;
+plotOptions.MaxwellLineWidth        = 3;
 plotOptions.FitLegendLocation       = 'east';
 
 

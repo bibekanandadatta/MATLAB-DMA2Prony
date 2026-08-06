@@ -14,41 +14,40 @@ function masterCurve = dmaBuildMasterCurve(data, shiftFactors, varargin)
 %
 % See also DMAESTIMATESHIFTFACTORS, DMAGROUPISOTHERMS.
 
-p = inputParser;
-p.addRequired('data', @istable);
-p.addRequired('shiftFactors', @istable);
-p.addParameter('TemperatureTolerance', 0.5, ...
-    @(x) isnumeric(x) && isscalar(x) && x > 0);
-p.parse(data, shiftFactors, varargin{:});
+    p       = inputParser;
+    
+    p.addRequired('data', @istable);
+    p.addRequired('shiftFactors', @istable);
+    p.addParameter('TemperatureTolerance', 0.5, @(x) isnumeric(x) && isscalar(x) && x > 0);
+    p.parse(data, shiftFactors, varargin{:});
+    
+    requiredData        = {'Frequency_Hz', 'Temperature_C'};
+    requiredShift       = {'Set', 'log10_aT'};
+    missingData         = requiredData(~ismember(requiredData, data.Properties.VariableNames));
+    missingShift        = requiredShift(~ismember(requiredShift, shiftFactors.Properties.VariableNames));
+    if ~isempty(missingData) || ~isempty(missingShift)
+        error('dmaBuildMasterCurve:MissingVariables', ...
+            'The data or shift-factor table is missing required variables.');
+    end
+    
+    [data, ~]           = dmaGroupIsotherms(data, ...
+        'TemperatureTolerance', p.Results.TemperatureTolerance);
+    
+    % Match on Set rather than table row number. This also allows the user to
+    % reorder the shift-factor table after making manual corrections.
+    [found, location] = ismember(data.Set, shiftFactors.Set);
+    if ~all(found)
+        error('dmaBuildMasterCurve:MissingShiftFactor', ...
+            'A shift factor is not available for every measurement set.');
+    end
+    
+    masterCurve                                 = data;
+    masterCurve.log10_aT                        = shiftFactors.log10_aT(location);
+    masterCurve.ShiftedFrequency_Hz             = masterCurve.Frequency_Hz .* 10.^masterCurve.log10_aT;
+    masterCurve.ShiftedAngularFrequency_rad_s   = 2*pi*masterCurve.ShiftedFrequency_Hz;
+    
+    % A monotonic frequency column makes later filtering and interpolation
+    % predictable, especially where shifted isotherms overlap.
+    masterCurve                                 = sortrows(masterCurve, 'ShiftedFrequency_Hz');
 
-requiredData = {'Frequency_Hz', 'Temperature_C'};
-requiredShift = {'Set', 'log10_aT'};
-missingData = requiredData(~ismember(requiredData, data.Properties.VariableNames));
-missingShift = requiredShift(~ismember(requiredShift, shiftFactors.Properties.VariableNames));
-if ~isempty(missingData) || ~isempty(missingShift)
-    error('dmaBuildMasterCurve:MissingVariables', ...
-        'The data or shift-factor table is missing required variables.');
-end
-
-[data, ~] = dmaGroupIsotherms(data, ...
-    'TemperatureTolerance', p.Results.TemperatureTolerance);
-
-% Match on Set rather than table row number. This also allows the user to
-% reorder the shift-factor table after making manual corrections.
-[found, location] = ismember(data.Set, shiftFactors.Set);
-if ~all(found)
-    error('dmaBuildMasterCurve:MissingShiftFactor', ...
-        'A shift factor is not available for every measurement set.');
-end
-
-masterCurve = data;
-masterCurve.log10_aT = shiftFactors.log10_aT(location);
-masterCurve.ShiftedFrequency_Hz = masterCurve.Frequency_Hz .* ...
-    10.^masterCurve.log10_aT;
-masterCurve.ShiftedAngularFrequency_rad_s = ...
-    2*pi*masterCurve.ShiftedFrequency_Hz;
-
-% A monotonic frequency column makes later filtering and interpolation
-% predictable, especially where shifted isotherms overlap.
-masterCurve = sortrows(masterCurve, 'ShiftedFrequency_Hz');
 end

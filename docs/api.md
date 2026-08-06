@@ -38,18 +38,28 @@ present and derives tan delta when both moduli are present.
 Plot one or more table variables, optionally grouped by set or another column.
 
 ```matlab
+plotOptions = dmaPlot('defaults');
+plotOptions.ModulusType = 'E';
+plotOptions.ModulusUnit = 'MPa';
+
 ax = dmaPlot(data, ...
     'XVariable', 'Frequency_Hz', ...
-    'YVariables', {'StorageModulus'}, ...
+    'YVariables', {'StorageModulus', 'LossModulus'}, ...
+    'SecondaryYVariables', {'TanDelta'}, ...
     'GroupVariable', 'Set', ...
     'PlotOptions', plotOptions)
 ```
+
+Calling `dmaPlot('defaults')` returns the complete default structure. A partial
+structure can also be passed directly; every omitted field is filled from the
+same internal defaults.
 
 ### Name-value inputs
 
 - `XVariable`: table column used for the horizontal axis. If omitted, a
   suitable available variable is selected.
 - `YVariables`: one name or a cell/string array of response columns.
+- `SecondaryYVariables`: optional response columns plotted on the right y-axis.
 - `GroupVariable`: grouping column, `auto`, or an empty string for no grouping.
 - `Scale`: `auto`, `linear`, `semilogx`, `semilogy`, or `loglog`. A direct
   `Scale` input overrides `PlotOptions.Scale`.
@@ -61,30 +71,41 @@ ax = dmaPlot(data, ...
 | Field | Purpose |
 |---|---|
 | `Scale` | Axis scaling mode |
-| `LineWidth` | Data-line width |
+| `SecondaryYScale` | `linear` or `log` scale for the right y-axis |
+| `LineWidth` | General data-line width |
+| `Marker`, `MarkerSize` | General marker symbol and size |
+| `ShiftedLineWidth`, `ShiftedMarker` | Shifted-master-curve line width and marker used by the example |
+| `FilteredMarker`, `FilteredMarkerSize`, `FilteredMarkerLineWidth` | Filtered-master-curve marker settings used by the example |
+| `MaxwellLineWidth` | Maxwell-fit line width used by the example |
 | `AxesLineWidth` | Axes border/tick width |
 | `FontName` | Axes, label, and legend font |
 | `AxisLabelFontSize` | Axis-label size |
 | `TickLabelFontSize` | Tick-label size |
 | `LegendFontSize` | Legend size |
 | `TitleFontSize` | Title size if a title is supplied externally |
-| `LegendInterpreter` | `none`, `tex`, or `latex` |
-| `XLabelInterpreter` | x-label interpreter |
-| `YLabelInterpreter` | y-label interpreter |
-| `TickLabelInterpreter` | tick interpreter |
-| `TitleInterpreter` | title interpreter |
+| `ColorbarFontSize` | Temperature-colorbar tick size |
+| `Interpreter` | shared label, tick, legend, title, and colorbar interpreter: `none`, `tex`, or `latex` |
 | `Box` | `on` or `off` |
 | `Grid` | `on` or `off` |
 | `MinorTicks` | `on` or `off` |
 | `ShowLegend` | `on` or `off` |
 | `LegendLocation` | MATLAB legend location; default `best` |
+| `ShiftedLegendLocation` | response-legend location for the shifted plot in the example |
+| `FitLegendLocation` | legend location for the filtered/fitted plot in the example |
 | `LegendBox` | `on` or `off` |
-| `LegendNumColumns` | positive integer |
-| `XLim`, `YLim` | empty or increasing two-value limits |
-| `XTicks`, `YTicks` | empty or increasing tick vectors |
+| `TemperatureColorbar` | `auto`, `on`, or `off`; `auto` uses it for grouped isotherms |
+| `ColorMap`, `ColorbarLocation` | temperature colormap and colorbar placement |
+| `TemperatureLimits`, `TemperatureTicks` | optional colorbar range and ticks |
+| `ModulusType` | `E` for tension/compression or `G` for shear labels |
+| `ModulusUnit` | modulus-unit label such as `Pa`, `kPa`, or `MPa` |
+| `ResponseLineStyles`, `ResponseColors` | visual distinction between responses |
+| `XLim`, `YLim`, `SecondaryYLim` | empty or increasing two-value limits |
+| `XTicks`, `YTicks`, `SecondaryYTicks` | empty or increasing tick vectors |
 
-Isotherm legends contain temperature only. Plot each DMA response in a
-separate figure when independent axis limits are required.
+`ModulusType` and `ModulusUnit` change labels only; numerical values are never
+rescaled. When the temperature colorbar is active, it replaces the long list
+of isotherm legend entries. A compact response legend is retained when several
+quantities share one figure.
 
 ## `dmaGroupIsotherms`
 
@@ -222,8 +243,11 @@ explicitly before fitting.
 
 - `Terms`: table containing `Term`, `tau_i_s`, `f_i_Hz`, `g_i`, and `E_i`.
 - `E_0`, `E_inf`: instantaneous and equilibrium modulus.
-- `RMSE_StorageModulus`, `RMSE_LossModulus`: dimensional errors.
+- `RMSE_StorageModulus`, `RMSE_LossModulus`, `RMSE_TanDelta`: dimensional
+  modulus errors and absolute tan-delta error.
 - `NRMSE_StorageModulus`, `NRMSE_LossModulus`: range-normalized errors.
+- `RMSRelativeError_StorageModulus`, `RMSRelativeError_LossModulus`,
+  `RMSRelativeError_TanDelta`: point-relative errors used to judge the fit.
 - `FrequencyRange_Hz`, `RelaxationTimeRange_s`: ranges actually fitted.
 - `FittedCurve`: measured and fitted responses at fitting frequencies.
 

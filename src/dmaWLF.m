@@ -9,8 +9,9 @@ function log10aT = dmaWLF(temperature, referenceTemperature, C1, C2)
 %
 % See also DMAFITWLF, DMAPREDICTTEMPERATURERESPONSE.
 
-deltaT = temperature - referenceTemperature;
 % Writing the equation in terms of deltaT keeps the reference condition
 % explicit: deltaT = 0 gives log10(aT) = 0.
-log10aT = -C1 .* deltaT ./ (C2 + deltaT);
+
+    deltaT      = temperature - referenceTemperature;
+    log10aT     = -C1 .* deltaT ./ (C2 + deltaT);
 end

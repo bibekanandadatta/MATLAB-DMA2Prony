@@ -164,7 +164,7 @@ $$
 $$
 
 Angular frequency describes temporal phase rate and does not imply torsional
-loading. Relaxation times and their collocation frequencies are related by
+loading. Relaxation times and their mechanism frequencies are related by
 
 $$
 \tau_i = \frac{1}{\omega_i}=\frac{1}{2\pi f_i}.
@@ -199,10 +199,16 @@ $$
 ### Fixed-time fitting
 
 For `exact`, `round`, and `manual` modes, relaxation times are placed
-logarithmically in the selected window. Storage and loss modulus are
-interpolated at the collocation frequencies, and nonnegative generalized
-collocation is solved with `lsqnonneg`. Coefficients are normalized if necessary
-so that $\sum_i g_i\le 1$.
+logarithmically in the selected window. The fitter evaluates the Maxwell basis
+at every measured frequency and solves simultaneously for
+$E_\infty$ and the nonnegative $E_i$ values with `lsqnonneg`. Each storage and
+loss equation is divided by its measured magnitude, so the larger numerical
+scale of storage modulus does not overwhelm the loss-modulus residuals. The
+instantaneous modulus is then
+
+$$
+E_0=E_\infty+\sum_i E_i.
+$$
 
 The number of terms is always supplied by the user. Term-count comparison is
 provided as a diagnostic and does not silently select a model.
@@ -228,10 +234,6 @@ The fitted equations are evaluated on a user-controlled logarithmic grid to
 produce smooth storage modulus, loss modulus, tan delta, and relaxation modulus
 curves. This calculation is analytic at each requested point. It is separate
 from filtering and can also evaluate an explicit list of frequencies.
-
-For identical master curves, filtering settings, term counts, and exact
-relaxation windows, the included MATLAB fixed-time Prony implementation has
-been compared with PyVisco and agrees to numerical precision.
 
 ## 9. Temperature-dependent prediction
 

@@ -60,6 +60,10 @@ The worked example collects the settings intended for user adjustment at the
 top of the script. It is an analysis example rather than an assertion-heavy
 unit test.
 
+Use `plotOptions = dmaPlot('defaults')` to inspect the plotting defaults, or
+pass a partial structure and let `dmaPlot` fill the omitted fields. Set
+`plotOptions.Interpreter` to `tex`, `latex`, or `none` for all plot text.
+
 A minimal calculation is:
 
 ```matlab
