@@ -31,62 +31,80 @@ allowPredictionExtrapolation        = false;
 % Start from complete defaults and change only the preferred presentation.
 plotOptions                         = dmaPlot('defaults');
 
-plotOptions.Scale                   = 'loglog';
-plotOptions.LineWidth               = 3;
+% Common plot options
 plotOptions.AxesLineWidth           = 1.0;
 plotOptions.FontName                = 'Latin Modern';
 plotOptions.AxisLabelFontSize       = 30;
 plotOptions.TickLabelFontSize       = 30;
 plotOptions.ColorbarFontSize        = 30;
 plotOptions.LegendFontSize          = 24;
-
-
 plotOptions.Interpreter             = 'latex';      % none, tex, or latex
 plotOptions.Box                     = 'on';
 plotOptions.Grid                    = 'on';
 plotOptions.MinorTicks              = 'on';
-plotOptions.ShowLegend              = 'on';
-plotOptions.LegendLocation          = 'best';
-
 plotOptions.LegendBox               = 'off';
-plotOptions.TemperatureColorbar     = 'auto';
 plotOptions.ColorMap                = 'turbo';
+plotOptions.ColorbarLocation        = 'eastoutside';
 plotOptions.ModulusType             = 'E';          % E for tension/compression, G for shear
 plotOptions.ModulusUnit             = 'MPa';        % label only; data are not rescaled
-plotOptions.XLim                    = [];
-plotOptions.YLim                    = [];
-plotOptions.SecondaryYLim           = [];
-plotOptions.XTicks                  = [];
-plotOptions.YTicks                  = [];
-plotOptions.SecondaryYTicks         = [];
 
+% Raw DMA plots: storage modulus, loss modulus, and loss factor
+plotOptions.RawScale                = {'loglog', 'loglog', 'semilogx'};
+plotOptions.RawLineWidth            = 3;
+plotOptions.RawMarker               = 'none';
+plotOptions.RawMarkerSize           = 7;
+plotOptions.RawTempLimits           = [];
+plotOptions.RawTempTicks            = [];
+plotOptions.RawXLim                 = {[], [], []};
+plotOptions.RawXTicks               = {[], [], []};
+plotOptions.RawYLim                 = {[], [], []};
+plotOptions.RawYTicks               = {[], [], []};
+
+% Shifted master curve
+plotOptions.ShiftedScale            = 'loglog';
+plotOptions.ShiftedSecondaryYScale  = 'linear';
 plotOptions.ShiftedLineWidth        = 5;
 plotOptions.ShiftedMarker           = 'none';
+plotOptions.ShiftedMarkerSize       = 7;
 plotOptions.ShiftedLegendLocation   = 'east';
+plotOptions.ShiftedTempLimits       = [];
+plotOptions.ShiftedTempTicks        = [];
+plotOptions.ShiftedXLim             = [];
+plotOptions.ShiftedXTicks           = [];
+plotOptions.ShiftedYLim             = [];
+plotOptions.ShiftedYTicks           = [];
+plotOptions.ShiftedSecondaryYLim    = [];
+plotOptions.ShiftedSecondaryYTicks  = [];
 
+% Filtered master curve and Maxwell fit
+plotOptions.FitScale                = 'loglog';
+plotOptions.FitSecondaryYScale      = 'linear';
 plotOptions.FilteredMarker          = '^';
 plotOptions.FilteredMarkerSize      = 7;
 plotOptions.FilteredMarkerLineWidth = 2;
 plotOptions.MaxwellLineWidth        = 4;
 plotOptions.FitLegendLocation       = 'east';
+plotOptions.FitXLim                 = [];
+plotOptions.FitXTicks               = [];
+plotOptions.FitYLim                 = [];
+plotOptions.FitYTicks               = [];
+plotOptions.FitSecondaryYLim        = [];
+plotOptions.FitSecondaryYTicks      = [];
 
-
-plotVariables                       = {'StorageModulus', 'LossModulus', 'TanDelta'};
-plotNames                           = {'Storage modulus', 'Loss modulus', 'Tan delta'};
-plotScales                          = {'loglog', 'loglog', 'semilogx'};
+% WLF fit
+plotOptions.WLFMarker               = 'o';
+plotOptions.WLFMarkerSize           = 8;
+plotOptions.WLFMarkerLineWidth      = 3;
+plotOptions.WLFLineWidth            = 3;
+plotOptions.WLFLegendLocation       = 'northeast';
+plotOptions.WLFXLim                 = [-50 100];
+plotOptions.WLFXTicks               = -50:25:100;
+plotOptions.WLFYLim                 = [-20 20];
+plotOptions.WLFYTicks               = -20:10:20;
 
 %% 1. Import and plot the measured frequency sweeps
 data                                = dmaReadTAExcel(dataFile, 'Sheet', sheetName);
-
-for k = 1:numel(plotVariables)
-
-    figureHandle        = figure('Name', ['Raw DMA - ', plotNames{k}],'NumberTitle', 'off', 'Color', 'w');
-    plotOptions.Scale   = plotScales{k};
-    
-    dmaPlot(data, 'XVariable', 'Frequency_Hz', ...
-        'YVariables', plotVariables(k), 'GroupVariable', 'Set', ...
-        'Axes', axes('Parent', figureHandle), 'PlotOptions', plotOptions);
-end
+dmaPlot('raw', data, plotOptions);
 
 
 % The two highest-frequency points in this example show a repeated upward
@@ -111,22 +129,8 @@ disp(shiftDiagnosticsTable(:, {'ReferenceTemperature_C', ...
 
 
 %% 3. Construct and plot the shifted measured data
-masterCurve = dmaBuildMasterCurve(analysisData, shiftFactors);
-
-figureHandle                        = figure('Name', 'Shifted DMA', ...
-                                         'NumberTitle', 'off', 'Color', 'w');
-shiftedPlotOptions                  = plotOptions;
-shiftedPlotOptions.Scale            = 'loglog';
-shiftedPlotOptions.SecondaryYScale  = 'linear';
-shiftedPlotOptions.LineWidth        = plotOptions.ShiftedLineWidth;
-shiftedPlotOptions.Marker           = plotOptions.ShiftedMarker;
-shiftedPlotOptions.LegendLocation   = plotOptions.ShiftedLegendLocation;
-
-dmaPlot(masterCurve, 'XVariable', 'ShiftedFrequency_Hz', ...
-    'YVariables', {'StorageModulus', 'LossModulus'}, ...
-    'SecondaryYVariables', {'TanDelta'}, 'GroupVariable', 'Set', ...
-    'Axes', axes('Parent', figureHandle), ...
-    'PlotOptions', shiftedPlotOptions);
+masterCurve                         = dmaBuildMasterCurve(analysisData, shiftFactors);
+dmaPlot('shifted', masterCurve, plotOptions);
 
 
 
@@ -170,7 +174,6 @@ disp(prony.Terms)
 denseResponse                   = dmaEvaluateProny(prony, ...
                                  'FrequencyRange', prony.FrequencyRange_Hz, ...
                                  'PointsPerDecade', densePointsPerDecade);
-denseResponse.ReducedFrequency_Hz = denseResponse.Frequency_Hz;
 
 % Plot only the measurements admitted to the fit. The complete shifted master
 % curve, including the excluded high-frequency region, is shown in Section 3.
@@ -178,61 +181,7 @@ fitMasterCurve                  = filteredMasterCurve( ...
     filteredMasterCurve.ShiftedFrequency_Hz >= prony.FrequencyRange_Hz(1) & ...
     filteredMasterCurve.ShiftedFrequency_Hz <= prony.FrequencyRange_Hz(2), :);
 
-figureHandle                        = figure('Name', 'Filtered master curve and Maxwell fit', ...
-                                         'NumberTitle', 'off', 'Color', 'w');
-ax                                  = axes('Parent', figureHandle);
-fitPlotOptions                      = plotOptions;
-fitPlotOptions.Scale                = 'loglog';
-fitPlotOptions.SecondaryYScale      = 'linear';
-fitPlotOptions.LineWidth            = plotOptions.MaxwellLineWidth;
-fitPlotOptions.ResponseLineStyles   = {'-'};
-fitPlotOptions.ShowLegend           = 'off';
-fitPlotOptions.TemperatureColorbar  = 'off';
-
-responseColors                  = fitPlotOptions.ResponseColors;
-
-yyaxis(ax, 'left');
-set(ax, 'XScale', 'log', 'YScale', 'log');
-hold(ax, 'on');
-plot(ax, fitMasterCurve.ShiftedFrequency_Hz, ...
-    fitMasterCurve.StorageModulusFiltered, plotOptions.FilteredMarker, ...
-    'LineStyle', 'none', 'MarkerSize', plotOptions.FilteredMarkerSize, ...
-    'LineWidth', plotOptions.FilteredMarkerLineWidth, ...
-    'Color', responseColors(1,:));
-plot(ax, fitMasterCurve.ShiftedFrequency_Hz, ...
-    fitMasterCurve.LossModulusFiltered, plotOptions.FilteredMarker, ...
-    'LineStyle', 'none', 'MarkerSize', plotOptions.FilteredMarkerSize, ...
-    'LineWidth', plotOptions.FilteredMarkerLineWidth, ...
-    'Color', responseColors(2,:));
-
-yyaxis(ax, 'right');
-set(ax, 'XScale', 'log', 'YScale', 'linear');
-hold(ax, 'on');
-plot(ax, fitMasterCurve.ShiftedFrequency_Hz, ...
-    fitMasterCurve.TanDeltaFiltered, plotOptions.FilteredMarker, ...
-    'LineStyle', 'none', 'MarkerSize', plotOptions.FilteredMarkerSize, ...
-    'LineWidth', plotOptions.FilteredMarkerLineWidth, ...
-    'Color', responseColors(3,:));
-
-dmaPlot(denseResponse, 'XVariable', 'ReducedFrequency_Hz', ...
-    'YVariables', {'StorageModulus', 'LossModulus'}, ...
-    'SecondaryYVariables', {'TanDelta'}, 'GroupVariable', '', ...
-    'Axes', ax, 'PlotOptions', fitPlotOptions);
-
-yyaxis(ax, 'left');
-filteredLegend                  = plot(ax, nan, nan, ...
-    'Color', [0 0 0], 'LineStyle', 'none', ...
-    'Marker', plotOptions.FilteredMarker, ...
-    'MarkerSize', plotOptions.FilteredMarkerSize, ...
-    'LineWidth', plotOptions.FilteredMarkerLineWidth);
-maxwellLegend                   = plot(ax, nan, nan, 'k-', ...
-    'LineWidth', plotOptions.MaxwellLineWidth);
-legend(ax, [filteredLegend, maxwellLegend], ...
-    {'Filtered master curve', 'Maxwell fit'}, ...
-    'Location', plotOptions.FitLegendLocation, ...
-    'Interpreter', plotOptions.Interpreter, ...
-    'FontSize', plotOptions.LegendFontSize, ...
-    'Box', plotOptions.LegendBox);
+dmaPlot('fit', fitMasterCurve, denseResponse, plotOptions);
 
 
 
@@ -254,26 +203,4 @@ disp(temperaturePrediction)
 
 
 %% 10. Plot the WLF fit
-figure;
-clf;
-hold on;
-box on;
-grid off;
-
-[temperaturePlot, order] = sort(wlf.Data.Temperature_C);
-plot(wlf.Data.Temperature_C, wlf.Data.MeasuredLog10aT, 'o', ...
-    'MarkerSize', 8, 'LineWidth', 3, 'DisplayName', 'Calculated shift factors');
-
-plot(temperaturePlot, wlf.Data.FittedLog10aT(order), '-', ...
-    'LineWidth', 3, 'DisplayName', 'WLF fit');
-
-temperatureLabel    = 'Temperature ($^{\circ}$C)';
-shiftFactorLabel    = '$\log_{10}(a_T)$';
-
-xlabel(temperatureLabel, 'Interpreter', 'latex', 'FontSize', 30);
-ylabel(shiftFactorLabel, 'Interpreter', 'latex', 'FontSize', 30);
-set(gca, 'xlim', [-50, 100], 'xtick', -50:25:100, 'XMinorTick', 'on', ...
-    'ylim', [-20, 20], 'ytick', -20:10:20, 'YMinorTick','on', ...
-    'TickLabelInterpreter', 'latex', 'FontSize', 24)
-legend('FontSize', 20, 'Location', 'northeast', 'Box', 'off', 'Interpreter', 'latex');
-hold off;
+dmaPlot('wlf', wlf, plotOptions);

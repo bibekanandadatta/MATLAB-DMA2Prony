@@ -1,204 +1,365 @@
-function [ax, plotHandles] = dmaPlot(data, varargin)
-%DMAPLOT Plot DMA signals with optional grouping and a secondary y-axis.
+function plotHandles = dmaPlot(plotType, varargin)
+%DMAPLOT Create the standard plots used by the DMA analysis pipeline.
 %
 % plotOptions = dmaPlot('defaults')
-% dmaPlot(data)
-% dmaPlot(data, 'XVariable', 'Frequency_Hz', ...
-%     'YVariables', {'StorageModulus','LossModulus'}, ...
-%     'SecondaryYVariables', {'TanDelta'}, ...
-%     'GroupVariable', 'Set', 'PlotOptions', plotOptions)
+% dmaPlot('raw', data, plotOptions)
+% dmaPlot('shifted', masterCurve, plotOptions)
+% dmaPlot('fit', filteredMasterCurve, denseResponse, plotOptions)
+% dmaPlot('wlf', wlf, plotOptions)
 %
-% Grouped isotherms can be colored continuously by temperature. In that
-% mode a colorbar replaces the long temperature legend. ModulusType and
-% ModulusUnit in PlotOptions control labels only; values are not converted.
-%
-% PlotOptions may contain any subset of the default fields. Missing fields
-% use their default values.
-%
-% See also DMAREADTAEXCEL.
+% The raw mode creates separate storage-modulus, loss-modulus, and loss-factor
+% figures. The other modes each create one figure. PlotOptions.ModulusType and
+% PlotOptions.ModulusUnit change labels only; the data are not rescaled.
 
-    if nargin == 1 && isTextScalar(data) && strcmpi(char(data), 'defaults')
-        ax              = defaultPlotOptions;
-        plotHandles     = struct;
+    if nargin == 1 && isTextScalar(plotType) && strcmpi(plotType, 'defaults')
+        plotHandles = defaultPlotOptions;
         return
     end
 
-    p       = inputParser;
-    p.addRequired('data', @istable);
-    p.addParameter('XVariable', '', @isTextScalar);
-    p.addParameter('YVariables', {}, @validVariableList);
-    p.addParameter('SecondaryYVariables', {}, @validVariableList);
-    p.addParameter('GroupVariable', 'auto', @isTextScalar);
-    p.addParameter('Scale', 'auto', @isTextScalar);
-    p.addParameter('Axes', [], @(x) isempty(x) || isgraphics(x, 'axes'));
-    p.addParameter('PlotOptions', struct, @isstruct);
-    p.parse(data, varargin{:});
-
-    options     = resolvePlotOptions(p.Results.PlotOptions);
-    xName       = char(p.Results.XVariable);
-
-    if isempty(xName)
-        candidates  = {'Frequency_Hz', 'Temperature_C', ...
-                       'OscillationStrain_pct', 'Amplitude', 'Time_s'};
-        xName       = firstAvailable(data, candidates);
+    if ~isTextScalar(plotType)
+        error('dmaPlot:InvalidPlotType', 'The plot type must be text.');
     end
 
-    if isempty(xName) || ~ismember(xName, data.Properties.VariableNames)
-        error('dmaPlot:MissingXVariable', ...
-            'The requested x variable is unavailable.');
+    switch lower(char(plotType))
+        case 'raw'
+            options     = resolvePlotOptions(varargin{2});
+            plotHandles = plotRawData(varargin{1}, options);
+
+        case 'shifted'
+            options     = resolvePlotOptions(varargin{2});
+            plotHandles = plotShiftedData(varargin{1}, options);
+
+        case {'fit', 'filtered'}
+            options     = resolvePlotOptions(varargin{3});
+            plotHandles = plotFilteredFit(varargin{1}, varargin{2}, options);
+
+        case 'wlf'
+            options     = resolvePlotOptions(varargin{2});
+            plotHandles = plotWLF(varargin{1}, options);
+
+        otherwise
+            error('dmaPlot:InvalidPlotType', ...
+                'Plot type must be raw, shifted, fit, or wlf.');
     end
+end
 
-    primaryNames    = normalizeVariableList(p.Results.YVariables);
-    secondaryNames  = normalizeVariableList(p.Results.SecondaryYVariables);
+function handles = plotRawData(data, options)
+% Plot the three measured DMA quantities in separate figures.
 
-    if isempty(primaryNames) && isempty(secondaryNames)
-        candidates      = {'StorageModulus', 'LossModulus', 'TanDelta'};
-        primaryNames    = candidates(ismember(candidates, ...
-            data.Properties.VariableNames));
-    end
+    requireTableVariables(data, {'Frequency_Hz', 'StorageModulus', ...
+        'LossModulus', 'TanDelta', 'Temperature_C'});
 
-    allNames    = [primaryNames, secondaryNames];
-    if isempty(allNames)
-        error('dmaPlot:MissingYVariables', ...
-            'No requested response variable is available.');
-    end
+    [groupIndex, temperatures, colors, colorMap, temperatureLimits] = ...
+        temperatureGroups(data, options.RawTempLimits, options);
 
-    missing     = allNames(~ismember(allNames, data.Properties.VariableNames));
-    if ~isempty(missing)
-        error('dmaPlot:MissingYVariables', ...
-            'Unavailable response variable: %s', strjoin(missing, ', '));
-    end
+    variables   = {'StorageModulus', 'LossModulus', 'TanDelta'};
+    names       = {'Storage modulus', 'Loss modulus', 'Loss factor'};
+    handles     = initializeHandles(3);
+    labelArgs   = labelArguments(options);
 
-    groupName   = char(p.Results.GroupVariable);
-    if strcmpi(groupName, 'auto')
-        if ismember('Set', data.Properties.VariableNames)
-            groupName   = 'Set';
-        else
-            groupName   = '';
-        end
-    end
+    for k = 1:3
+        handles.Figures(k) = figure('Name', ['Raw DMA - ', names{k}], ...
+            'NumberTitle', 'off', 'Color', 'w');
+        handles.Axes(k)    = axes('Parent', handles.Figures(k));
+        ax                 = handles.Axes(k);
 
-    [groupIndex, groupValues]             = makeGroups(data, groupName);
-    [groupTemperatures, hasTemperature]   = findGroupTemperatures( ...
-        data, groupIndex, groupValues, groupName);
-    useTemperatureColorbar                = chooseTemperatureColorbar( ...
-        options.TemperatureColorbar, hasTemperature, numel(groupValues));
+        [xScale, yScale] = splitScale(options.RawScale{k});
+        prepareAxes(ax, xScale, yScale, options);
 
-    if useTemperatureColorbar
-        [groupColors, colorMap, temperatureLimits] = temperatureColors( ...
-            groupTemperatures, options);
-    else
-        groupColors        = lines(max(numel(groupValues), 1));
-        colorMap           = [];
-        temperatureLimits  = [];
-    end
+        for g = 1:numel(temperatures)
+            rows            = groupIndex == g;
+            [frequency, ix] = sort(data.Frequency_Hz(rows));
+            response        = data.(variables{k})(rows);
+            response        = response(ix);
+            valid           = isfinite(frequency) & isfinite(response);
+            if strcmp(xScale, 'log'), valid = valid & frequency > 0; end
+            if strcmp(yScale, 'log'), valid = valid & response > 0; end
 
-    if ismember('Scale', p.UsingDefaults)
-        scale   = lower(char(options.Scale));
-    else
-        scale   = lower(char(p.Results.Scale));
-    end
-
-    if strcmp(scale, 'auto')
-        if any(strcmp(xName, ...
-                {'Frequency_Hz', 'AngularFrequency_rad_s', ...
-                 'ShiftedFrequency_Hz', 'ReducedFrequency_Hz', 'Time_s'}))
-            scale   = 'loglog';
-        else
-            scale   = 'semilogy';
-        end
-    end
-
-    [xScale, primaryYScale]    = splitScale(scale);
-    secondaryYScale            = options.SecondaryYScale;
-    validateLogLimits(options, xScale, primaryYScale, ...
-        secondaryYScale, ~isempty(secondaryNames));
-
-    if isempty(p.Results.Axes)
-        ax  = gca;
-    else
-        ax  = p.Results.Axes;
-    end
-
-    if ~isempty(secondaryNames)
-        yyaxis(ax, 'left');
-    end
-
-    prepareAxes(ax, xScale, primaryYScale, options);
-    primaryHandles  = plotResponses(ax, data, xName, primaryNames, ...
-        groupIndex, groupValues, groupColors, groupName, options, ...
-        useTemperatureColorbar, 0, numel(allNames));
-    applyYWindow(ax, options.YLim, options.YTicks);
-    ylabel(ax, makeAxisLabel(primaryNames, options), ...
-        'Interpreter', options.Interpreter, ...
-        'FontName', options.FontName, ...
-        'FontSize', options.AxisLabelFontSize);
-
-    secondaryHandles = gobjects(0,1);
-    if ~isempty(secondaryNames)
-        yyaxis(ax, 'right');
-        prepareAxes(ax, xScale, secondaryYScale, options);
-        secondaryHandles = plotResponses(ax, data, xName, secondaryNames, ...
-            groupIndex, groupValues, groupColors, groupName, options, ...
-            useTemperatureColorbar, numel(primaryNames), numel(allNames));
-        applyYWindow(ax, options.SecondaryYLim, options.SecondaryYTicks);
-        ylabel(ax, makeAxisLabel(secondaryNames, options), ...
-            'Interpreter', options.Interpreter, ...
-            'FontName', options.FontName, ...
-            'FontSize', options.AxisLabelFontSize);
-
-        ax.YAxis(1).Color  = [0 0 0];
-        ax.YAxis(2).Color  = [0 0 0];
-        yyaxis(ax, 'left');
-    end
-
-    applyXWindow(ax, options.XLim, options.XTicks);
-    xlabel(ax, displayName(xName, options.Interpreter), ...
-        'Interpreter', options.Interpreter, ...
-        'FontName', options.FontName, ...
-        'FontSize', options.AxisLabelFontSize);
-    set(ax.Title, ...
-        'Interpreter', options.Interpreter, ...
-        'FontName', options.FontName, ...
-        'FontSize', options.TitleFontSize);
-
-    colorbarHandle = gobjects(0);
-    if useTemperatureColorbar
-        colormap(ax, colorMap);
-        clim(ax, temperatureLimits);
-        colorbarHandle = colorbar(ax, 'Location', options.ColorbarLocation);
-        set(colorbarHandle, ...
-            'FontName', options.FontName, ...
-            'FontSize', options.ColorbarFontSize, ...
-            'TickLabelInterpreter', options.Interpreter);
-
-        if ~isempty(options.TemperatureTicks)
-            colorbarHandle.Ticks = options.TemperatureTicks;
+            plot(ax, frequency(valid), response(valid), ...
+                'LineStyle', '-', ...
+                'Marker', options.RawMarker, ...
+                'MarkerSize', options.RawMarkerSize, ...
+                'LineWidth', options.RawLineWidth, ...
+                'Color', colors(g,:), ...
+                'HandleVisibility', 'off');
         end
 
-        colorbarHandle.Label.String       = temperatureAxisLabel( ...
-            options.Interpreter);
-        colorbarHandle.Label.Interpreter  = options.Interpreter;
-        colorbarHandle.Label.FontName     = options.FontName;
-        colorbarHandle.Label.FontSize     = options.AxisLabelFontSize;
+        xlabel(ax, frequencyLabel('f', 'Frequency', options.Interpreter), ...
+            labelArgs{:});
+        ylabel(ax, responseAxisLabel(variables{k}, options), ...
+            labelArgs{:});
+        applyAxisWindow(ax, options.RawXLim{k}, options.RawXTicks{k}, ...
+            options.RawYLim{k}, options.RawYTicks{k});
+
+        handles.Colorbars(k) = addTemperatureColorbar(ax, colorMap, ...
+            temperatureLimits, options.RawTempTicks, options);
+    end
+end
+
+function handles = plotShiftedData(data, options)
+% Plot shifted storage modulus, loss modulus, and loss factor together.
+
+    requireTableVariables(data, {'ShiftedFrequency_Hz', 'StorageModulus', ...
+        'LossModulus', 'TanDelta', 'Temperature_C'});
+
+    [groupIndex, temperatures, colors, colorMap, temperatureLimits] = ...
+        temperatureGroups(data, options.ShiftedTempLimits, options);
+
+    handles             = initializeHandles(1);
+    handles.Figures(1)  = figure('Name', 'Shifted DMA', ...
+        'NumberTitle', 'off', 'Color', 'w');
+    handles.Axes(1)     = axes('Parent', handles.Figures(1));
+    ax                  = handles.Axes(1);
+    [xScale, yScale]    = splitScale(options.ShiftedScale);
+    labelArgs           = labelArguments(options);
+
+    yyaxis(ax, 'left');
+    prepareAxes(ax, xScale, yScale, options);
+    for g = 1:numel(temperatures)
+        rows            = groupIndex == g;
+        [frequency, ix] = sort(data.ShiftedFrequency_Hz(rows));
+        storage         = data.StorageModulus(rows);
+        loss            = data.LossModulus(rows);
+        storage         = storage(ix);
+        loss            = loss(ix);
+
+        plotResponse(ax, frequency, storage, '-', colors(g,:), ...
+            options.ShiftedMarker, options.ShiftedMarkerSize, ...
+            options.ShiftedLineWidth, xScale, yScale);
+        plotResponse(ax, frequency, loss, '--', colors(g,:), ...
+            options.ShiftedMarker, options.ShiftedMarkerSize, ...
+            options.ShiftedLineWidth, xScale, yScale);
+    end
+    ylabel(ax, combinedModulusLabel(options), labelArgs{:});
+    applyWindow(ax, 'y', options.ShiftedYLim, options.ShiftedYTicks);
+
+    yyaxis(ax, 'right');
+    prepareAxes(ax, xScale, options.ShiftedSecondaryYScale, options);
+    for g = 1:numel(temperatures)
+        rows            = groupIndex == g;
+        [frequency, ix] = sort(data.ShiftedFrequency_Hz(rows));
+        lossFactor      = data.TanDelta(rows);
+        lossFactor      = lossFactor(ix);
+
+        plotResponse(ax, frequency, lossFactor, ':', colors(g,:), ...
+            options.ShiftedMarker, options.ShiftedMarkerSize, ...
+            options.ShiftedLineWidth, xScale, options.ShiftedSecondaryYScale);
+    end
+    ylabel(ax, lossFactorLabel(options.Interpreter), labelArgs{:});
+    applyWindow(ax, 'y', options.ShiftedSecondaryYLim, ...
+        options.ShiftedSecondaryYTicks);
+
+    ax.YAxis(1).Color = [0 0 0];
+    ax.YAxis(2).Color = [0 0 0];
+    yyaxis(ax, 'left');
+    xlabel(ax, frequencyLabel('f_s', 'Shifted frequency', ...
+        options.Interpreter), labelArgs{:});
+    applyWindow(ax, 'x', options.ShiftedXLim, options.ShiftedXTicks);
+
+    handles.Colorbars(1) = addTemperatureColorbar(ax, colorMap, ...
+        temperatureLimits, options.ShiftedTempTicks, options);
+    handles.Legends(1)   = shiftedLegend(ax, options);
+end
+
+function handles = plotFilteredFit(filteredData, denseResponse, options)
+% Plot filtered master-curve points and the generalized-Maxwell response.
+
+    requireTableVariables(filteredData, {'ShiftedFrequency_Hz', ...
+        'StorageModulusFiltered', 'LossModulusFiltered', 'TanDeltaFiltered'});
+    requireTableVariables(denseResponse, {'StorageModulus', ...
+        'LossModulus', 'TanDelta'});
+
+    if ismember('ReducedFrequency_Hz', denseResponse.Properties.VariableNames)
+        fitFrequency = denseResponse.ReducedFrequency_Hz;
+    elseif ismember('Frequency_Hz', denseResponse.Properties.VariableNames)
+        fitFrequency = denseResponse.Frequency_Hz;
+    else
+        error('dmaPlot:MissingVariable', ...
+            'The Maxwell response needs Frequency_Hz or ReducedFrequency_Hz.');
     end
 
-    legendHandle = makeLegend(ax, primaryHandles, secondaryHandles, ...
-        primaryNames, secondaryNames, options, useTemperatureColorbar);
+    handles             = initializeHandles(1);
+    handles.Figures(1)  = figure('Name', ...
+        'Filtered master curve and Maxwell fit', ...
+        'NumberTitle', 'off', 'Color', 'w');
+    handles.Axes(1)     = axes('Parent', handles.Figures(1));
+    ax                  = handles.Axes(1);
+    colors              = options.ResponseColors;
+    [xScale, yScale]    = splitScale(options.FitScale);
+    labelArgs           = labelArguments(options);
 
-    plotHandles            = struct;
-    plotHandles.Primary    = primaryHandles;
-    plotHandles.Secondary  = secondaryHandles;
-    plotHandles.Legend     = legendHandle;
-    plotHandles.Colorbar   = colorbarHandle;
+    yyaxis(ax, 'left');
+    prepareAxes(ax, xScale, yScale, options);
+    plotResponse(ax, filteredData.ShiftedFrequency_Hz, ...
+        filteredData.StorageModulusFiltered, 'none', colors(1,:), ...
+        options.FilteredMarker, options.FilteredMarkerSize, ...
+        options.FilteredMarkerLineWidth, xScale, yScale);
+    plotResponse(ax, filteredData.ShiftedFrequency_Hz, ...
+        filteredData.LossModulusFiltered, 'none', colors(2,:), ...
+        options.FilteredMarker, options.FilteredMarkerSize, ...
+        options.FilteredMarkerLineWidth, xScale, yScale);
+    plotResponse(ax, fitFrequency, denseResponse.StorageModulus, '-', ...
+        colors(1,:), 'none', 1, options.MaxwellLineWidth, xScale, yScale);
+    plotResponse(ax, fitFrequency, denseResponse.LossModulus, '-', ...
+        colors(2,:), 'none', 1, options.MaxwellLineWidth, xScale, yScale);
+    ylabel(ax, combinedModulusLabel(options), labelArgs{:});
+    applyWindow(ax, 'y', options.FitYLim, options.FitYTicks);
+
+    yyaxis(ax, 'right');
+    prepareAxes(ax, xScale, options.FitSecondaryYScale, options);
+    plotResponse(ax, filteredData.ShiftedFrequency_Hz, ...
+        filteredData.TanDeltaFiltered, 'none', colors(3,:), ...
+        options.FilteredMarker, options.FilteredMarkerSize, ...
+        options.FilteredMarkerLineWidth, xScale, ...
+        options.FitSecondaryYScale);
+    plotResponse(ax, fitFrequency, denseResponse.TanDelta, '-', ...
+        colors(3,:), 'none', 1, options.MaxwellLineWidth, xScale, ...
+        options.FitSecondaryYScale);
+    ylabel(ax, lossFactorLabel(options.Interpreter), labelArgs{:});
+    applyWindow(ax, 'y', options.FitSecondaryYLim, options.FitSecondaryYTicks);
+
+    ax.YAxis(1).Color = [0 0 0];
+    ax.YAxis(2).Color = [0 0 0];
+    yyaxis(ax, 'left');
+    xlabel(ax, frequencyLabel('f_r', 'Reduced frequency', ...
+        options.Interpreter), labelArgs{:});
+    applyWindow(ax, 'x', options.FitXLim, options.FitXTicks);
+    handles.Legends(1) = fitLegend(ax, options);
+end
+
+function handles = plotWLF(wlf, options)
+% Plot measured shift factors and the fitted WLF curve.
+
+    if ~isstruct(wlf) || ~isfield(wlf, 'Data') || ~istable(wlf.Data)
+        error('dmaPlot:InvalidWLF', 'The WLF input must contain a Data table.');
+    end
+    requireTableVariables(wlf.Data, {'Temperature_C', ...
+        'MeasuredLog10aT', 'FittedLog10aT'});
+
+    [temperature, order] = sort(wlf.Data.Temperature_C);
+    measured             = wlf.Data.MeasuredLog10aT(order);
+    fitted               = wlf.Data.FittedLog10aT(order);
+
+    handles             = initializeHandles(1);
+    handles.Figures(1)  = figure('Name', 'WLF fit', ...
+        'NumberTitle', 'off', 'Color', 'w');
+    handles.Axes(1)     = axes('Parent', handles.Figures(1));
+    ax                  = handles.Axes(1);
+    labelArgs           = labelArguments(options);
+
+    prepareAxes(ax, 'linear', 'linear', options);
+    measuredHandle = plot(ax, temperature, measured, ...
+        'LineStyle', 'none', ...
+        'Marker', options.WLFMarker, ...
+        'MarkerSize', options.WLFMarkerSize, ...
+        'LineWidth', options.WLFMarkerLineWidth, ...
+        'Color', options.ResponseColors(1,:));
+    fittedHandle = plot(ax, temperature, fitted, '-', ...
+        'LineWidth', options.WLFLineWidth, ...
+        'Color', options.ResponseColors(2,:));
+
+    xlabel(ax, temperatureAxisLabel(options.Interpreter), ...
+        labelArgs{:});
+    ylabel(ax, shiftFactorAxisLabel(options.Interpreter), ...
+        labelArgs{:});
+    applyAxisWindow(ax, options.WLFXLim, options.WLFXTicks, ...
+        options.WLFYLim, options.WLFYTicks);
+
+    handles.Legends(1) = legend(ax, [measuredHandle, fittedHandle], ...
+        {'Calculated shift factors', 'WLF fit'}, ...
+        'Location', options.WLFLegendLocation, ...
+        'Interpreter', options.Interpreter, ...
+        'FontName', options.FontName, ...
+        'FontSize', options.LegendFontSize, ...
+        'Box', options.LegendBox);
+end
+
+function options = defaultPlotOptions
+% Keep the common settings first, followed by the four plot-specific blocks.
+
+    options                           = struct;
+
+    % Common appearance
+    options.AxesLineWidth             = 1.0;
+    options.FontName                  = 'Arial';
+    options.AxisLabelFontSize         = 30;
+    options.TickLabelFontSize         = 30;
+    options.LegendFontSize            = 24;
+    options.ColorbarFontSize          = 30;
+    options.Interpreter               = 'none';
+    options.Box                       = 'on';
+    options.Grid                      = 'on';
+    options.MinorTicks                = 'on';
+    options.LegendBox                 = 'off';
+    options.ColorMap                  = 'turbo';
+    options.ColorbarLocation          = 'eastoutside';
+    options.ModulusType               = 'E';
+    options.ModulusUnit               = 'MPa';
+    options.ResponseColors            = [0.0000 0.4470 0.7410; ...
+                                         0.8500 0.3250 0.0980; ...
+                                         0.1500 0.1500 0.1500];
+
+    % Raw storage, loss, and loss-factor figures
+    options.RawScale                  = {'loglog', 'loglog', 'semilogx'};
+    options.RawLineWidth              = 3;
+    options.RawMarker                 = 'none';
+    options.RawMarkerSize             = 7;
+    options.RawTempLimits             = [];
+    options.RawTempTicks              = [];
+    options.RawXLim                   = {[], [], []};
+    options.RawXTicks                 = {[], [], []};
+    options.RawYLim                   = {[], [], []};
+    options.RawYTicks                 = {[], [], []};
+
+    % Shifted master curve
+    options.ShiftedScale              = 'loglog';
+    options.ShiftedSecondaryYScale    = 'linear';
+    options.ShiftedLineWidth          = 3;
+    options.ShiftedMarker             = 'none';
+    options.ShiftedMarkerSize         = 7;
+    options.ShiftedLegendLocation     = 'northwest';
+    options.ShiftedTempLimits         = [];
+    options.ShiftedTempTicks          = [];
+    options.ShiftedXLim               = [];
+    options.ShiftedXTicks             = [];
+    options.ShiftedYLim               = [];
+    options.ShiftedYTicks             = [];
+    options.ShiftedSecondaryYLim      = [];
+    options.ShiftedSecondaryYTicks    = [];
+
+    % Filtered master curve and Maxwell fit
+    options.FitScale                  = 'loglog';
+    options.FitSecondaryYScale        = 'linear';
+    options.FilteredMarker            = 'o';
+    options.FilteredMarkerSize        = 7;
+    options.FilteredMarkerLineWidth   = 3;
+    options.MaxwellLineWidth          = 3;
+    options.FitLegendLocation         = 'east';
+    options.FitXLim                   = [];
+    options.FitXTicks                 = [];
+    options.FitYLim                   = [];
+    options.FitYTicks                 = [];
+    options.FitSecondaryYLim         = [];
+    options.FitSecondaryYTicks       = [];
+
+    % WLF fit
+    options.WLFMarker                 = 'o';
+    options.WLFMarkerSize             = 8;
+    options.WLFMarkerLineWidth        = 3;
+    options.WLFLineWidth              = 3;
+    options.WLFLegendLocation         = 'northeast';
+    options.WLFXLim                   = [];
+    options.WLFXTicks                 = [];
+    options.WLFYLim                   = [];
+    options.WLFYTicks                 = [];
 end
 
 function options = resolvePlotOptions(userOptions)
-% Merge a partial user structure with the public defaults.
+% Fill omitted fields without introducing another public options structure.
 
-    options     = defaultPlotOptions;
-    provided    = fieldnames(userOptions);
-    unknown     = setdiff(provided, fieldnames(options));
+    options  = defaultPlotOptions;
+    provided = fieldnames(userOptions);
+    unknown  = setdiff(provided, fieldnames(options));
 
     if ~isempty(unknown)
         error('dmaPlot:UnknownPlotOption', ...
@@ -209,271 +370,108 @@ function options = resolvePlotOptions(userOptions)
         options.(provided{i}) = userOptions.(provided{i});
     end
 
-    positiveFields  = {'LineWidth', 'MarkerSize', 'ShiftedLineWidth', ...
-                       'FilteredMarkerSize', 'FilteredMarkerLineWidth', ...
-                       'MaxwellLineWidth', 'AxesLineWidth', ...
-                       'AxisLabelFontSize', 'TickLabelFontSize', ...
-                       'LegendFontSize', 'TitleFontSize', 'ColorbarFontSize'};
-    for i = 1:numel(positiveFields)
-        field   = positiveFields{i};
-        value   = options.(field);
-
-        if ~(isnumeric(value) && isscalar(value) && isfinite(value) && value > 0)
-            error('dmaPlot:InvalidPlotOption', ...
-                'PlotOptions.%s must be a positive scalar.', field);
-        end
-    end
-
-    textFields  = {'FontName', 'LegendLocation', 'ColorbarLocation', ...
-                   'ShiftedLegendLocation', 'FitLegendLocation', ...
-                   'Marker', 'ShiftedMarker', 'FilteredMarker', ...
-                   'ModulusType', 'ModulusUnit'};
-    for i = 1:numel(textFields)
-        field = textFields{i};
-        if ~isTextScalar(options.(field))
-            error('dmaPlot:InvalidPlotOption', ...
-                'PlotOptions.%s must be text.', field);
-        end
-        options.(field) = char(options.(field));
-    end
-
-    options.ModulusType = upper(options.ModulusType);
-    if ~ismember(options.ModulusType, {'E', 'G'})
-        error('dmaPlot:InvalidPlotOption', ...
-            'PlotOptions.ModulusType must be E or G.');
-    end
-
-    options.Scale               = validateChoice(options.Scale, ...
-        {'auto', 'linear', 'semilogx', 'semilogy', 'loglog'}, 'Scale');
-    options.SecondaryYScale     = validateChoice(options.SecondaryYScale, ...
-        {'linear', 'log'}, 'SecondaryYScale');
-    options.TemperatureColorbar = validateChoice(options.TemperatureColorbar, ...
-        {'auto', 'on', 'off'}, 'TemperatureColorbar');
-
-    options.Interpreter = validateChoice(options.Interpreter, ...
-        {'none', 'tex', 'latex'}, 'Interpreter');
-
-    onOffFields    = {'Box', 'Grid', 'MinorTicks', 'ShowLegend', 'LegendBox'};
-    for i = 1:numel(onOffFields)
-        field               = onOffFields{i};
-        options.(field)     = validateChoice(options.(field), ...
-            {'on', 'off'}, field);
-    end
-
-    limitFields    = {'TemperatureLimits', 'XLim', 'YLim', 'SecondaryYLim'};
-    for i = 1:numel(limitFields)
-        field               = limitFields{i};
-        options.(field)     = validateLimits(options.(field), field);
-    end
-
-    tickFields     = {'TemperatureTicks', 'XTicks', 'YTicks', 'SecondaryYTicks'};
-    for i = 1:numel(tickFields)
-        field               = tickFields{i};
-        options.(field)     = validateTicks(options.(field), field);
-    end
-
-    if ~(iscell(options.ResponseLineStyles) && ...
-            ~isempty(options.ResponseLineStyles) && ...
-            all(cellfun(@isTextScalar, options.ResponseLineStyles)))
-        error('dmaPlot:InvalidPlotOption', ...
-            'PlotOptions.ResponseLineStyles must be a nonempty cell array of text.');
-    end
-    options.ResponseLineStyles = cellfun(@char, options.ResponseLineStyles, ...
-        'UniformOutput', false);
-
-    if ~(isnumeric(options.ResponseColors) && size(options.ResponseColors,2) == 3 && ...
-            ~isempty(options.ResponseColors) && all(isfinite(options.ResponseColors), 'all') && ...
-            all(options.ResponseColors >= 0, 'all') && ...
-            all(options.ResponseColors <= 1, 'all'))
-        error('dmaPlot:InvalidPlotOption', ...
-            'PlotOptions.ResponseColors must be an N-by-3 array between zero and one.');
-    end
-
-    if ~(isTextScalar(options.ColorMap) || ...
-            (isnumeric(options.ColorMap) && size(options.ColorMap,2) == 3 && ...
-             ~isempty(options.ColorMap) && all(isfinite(options.ColorMap), 'all') && ...
-             all(options.ColorMap >= 0, 'all') && all(options.ColorMap <= 1, 'all')))
-        error('dmaPlot:InvalidPlotOption', ...
-            'PlotOptions.ColorMap must be a colormap name or an N-by-3 array.');
-    end
 end
 
-function options = defaultPlotOptions
-% Keep every graphics default in one place for both public and internal use.
+function [groupIndex, temperatures, colors, colorMap, limits] = ...
+    temperatureGroups(data, requestedLimits, options)
 
-    options                           = struct;
-    
-    options.Scale                     = 'auto';
-    options.SecondaryYScale           = 'linear';
-    options.LineWidth                 = 3;
-    options.Marker                    = 'none';
-    options.MarkerSize                = 7;
-    options.ShiftedLineWidth          = 3;
-    options.ShiftedMarker             = 'none';
-    options.FilteredMarker            = 'o';
-    options.FilteredMarkerSize        = 7;
-    options.FilteredMarkerLineWidth   = 3;
-    options.MaxwellLineWidth          = 3;
-    options.AxesLineWidth             = 1.0;
-    options.FontName                  = 'Arial';
-    options.AxisLabelFontSize         = 30;
-    options.TickLabelFontSize         = 30;
-    options.LegendFontSize            = 24;
-    options.TitleFontSize             = 30;
-    options.ColorbarFontSize          = 30;
-    options.Interpreter               = 'none';
-    options.Box                       = 'on';
-    options.Grid                      = 'on';
-    options.MinorTicks                = 'on';
-    options.ShowLegend                = 'on';
-    options.LegendLocation            = 'best';
-    options.ShiftedLegendLocation     = 'northwest';
-    options.FitLegendLocation         = 'east';
-    options.LegendBox                 = 'off';
-    options.TemperatureColorbar       = 'auto';
-    options.ColorMap                  = 'turbo';
-    options.ColorbarLocation          = 'eastoutside';
-    options.ModulusType               = 'E';
-    options.ModulusUnit               = 'MPa';
-    
-    options.ResponseLineStyles        = {'-', '--', ':', '-.'};
-    options.ResponseColors            = [0.0000 0.4470 0.7410; ...
-                                         0.8500 0.3250 0.0980; ...
-                                         0.1500 0.1500 0.1500];
-
-    options.TemperatureLimits         = [];
-    options.TemperatureTicks          = [];
-    options.XLim                      = [];
-    options.YLim                      = [];
-    options.SecondaryYLim             = [];
-    options.XTicks                    = [];
-    options.YTicks                    = [];
-    options.SecondaryYTicks           = [];
-end
-
-function [groupIndex, groupValues] = makeGroups(data, groupName)
-    if isempty(groupName)
-        groupIndex     = ones(height(data), 1);
-        groupValues    = 1;
-        return
+    if ismember('Set', data.Properties.VariableNames)
+        [groupIndex, groups] = findgroups(data.Set);
+    else
+        [groupIndex, groups] = findgroups(data.Temperature_C);
     end
 
-    if ~ismember(groupName, data.Properties.VariableNames)
-        error('dmaPlot:MissingGroupVariable', ...
-            'Group variable "%s" is unavailable.', groupName);
+    temperatures = nan(numel(groups), 1);
+    for g = 1:numel(groups)
+        temperatures(g) = mean(data.Temperature_C(groupIndex == g), 'omitnan');
     end
 
-    [groupIndex, groupValues] = findgroups(data.(groupName));
-end
-
-function [temperatures, available] = findGroupTemperatures( ...
-    data, groupIndex, groupValues, groupName)
-
-    available       = false;
-    temperatures    = nan(numel(groupValues), 1);
-
-    if strcmp(groupName, 'Temperature_C') && isnumeric(groupValues)
-        temperatures    = groupValues(:);
-        available       = all(isfinite(temperatures));
-    elseif ismember('Temperature_C', data.Properties.VariableNames)
-        for g = 1:numel(groupValues)
-            temperatures(g) = mean(data.Temperature_C(groupIndex == g), 'omitnan');
-        end
-        available       = all(isfinite(temperatures));
-    end
-end
-
-function useColorbar = chooseTemperatureColorbar(choice, available, numberOfGroups)
-    switch choice
-        case 'auto'
-            useColorbar = available && numberOfGroups > 1;
-        case 'on'
-            if ~available
-                error('dmaPlot:TemperatureUnavailable', ...
-                    ['TemperatureColorbar is on, but finite Temperature_C ', ...
-                     'values are unavailable for every plotted group.']);
-            end
-            useColorbar = true;
-        otherwise
-            useColorbar = false;
-    end
-end
-
-function [colors, map, limits] = temperatureColors(temperatures, options)
-    map     = resolveColorMap(options.ColorMap);
-    limits  = options.TemperatureLimits;
-
+    colorMap = resolveColorMap(options.ColorMap);
+    limits   = requestedLimits;
     if isempty(limits)
-        limits  = [min(temperatures), max(temperatures)];
+        limits = [min(temperatures), max(temperatures)];
     end
-
     if limits(1) == limits(2)
-        limits  = limits + [-0.5 0.5];
+        limits = limits + [-0.5 0.5];
     end
 
-    position    = (temperatures - limits(1)) / diff(limits);
-    position    = min(max(position, 0), 1);
-    mapPosition = linspace(0, 1, size(map,1));
-    colors      = interp1(mapPosition, map, position, 'linear');
+    position = min(max((temperatures - limits(1)) / diff(limits), 0), 1);
+    colors   = interp1(linspace(0, 1, size(colorMap,1)), colorMap, ...
+        position, 'linear');
 end
 
-function map = resolveColorMap(input)
-    if isnumeric(input)
-        map = input;
-        return
+function colorbarHandle = addTemperatureColorbar(ax, colorMap, limits, ticks, options)
+    colormap(ax, colorMap);
+    clim(ax, limits);
+    colorbarHandle = colorbar(ax, 'Location', options.ColorbarLocation);
+    set(colorbarHandle, ...
+        'FontName', options.FontName, ...
+        'FontSize', options.ColorbarFontSize, ...
+        'TickLabelInterpreter', options.Interpreter);
+
+    if ~isempty(ticks)
+        colorbarHandle.Ticks = ticks;
     end
 
-    name        = lower(char(input));
-    supported   = {'turbo', 'parula', 'jet', 'hot', 'cool', 'spring', ...
-                   'summer', 'autumn', 'winter', 'gray'};
-    if ~ismember(name, supported)
-        error('dmaPlot:InvalidPlotOption', ...
-            'Unsupported PlotOptions.ColorMap value "%s".', name);
-    end
-    map = feval(name, 256);
+    colorbarHandle.Label.String      = temperatureAxisLabel(options.Interpreter);
+    colorbarHandle.Label.Interpreter = options.Interpreter;
+    colorbarHandle.Label.FontName    = options.FontName;
+    colorbarHandle.Label.FontSize    = options.AxisLabelFontSize;
 end
 
-function [xScale, yScale] = splitScale(scale)
-    switch scale
-        case 'linear'
-            xScale = 'linear';
-            yScale = 'linear';
-        case 'semilogx'
-            xScale = 'log';
-            yScale = 'linear';
-        case 'semilogy'
-            xScale = 'linear';
-            yScale = 'log';
-        case 'loglog'
-            xScale = 'log';
-            yScale = 'log';
-        otherwise
-            error('dmaPlot:InvalidScale', 'Unknown plot scale "%s".', scale);
-    end
+function legendHandle = shiftedLegend(ax, options)
+    yyaxis(ax, 'left');
+    storage = plot(ax, nan, nan, 'k-', ...
+        'LineWidth', options.ShiftedLineWidth);
+    loss = plot(ax, nan, nan, 'k--', ...
+        'LineWidth', options.ShiftedLineWidth);
+    lossFactor = plot(ax, nan, nan, 'k:', ...
+        'LineWidth', options.ShiftedLineWidth);
+
+    legendHandle = legend(ax, [storage, loss, lossFactor], ...
+        {modulusSymbol(options.ModulusType, 1, options.Interpreter), ...
+         modulusSymbol(options.ModulusType, 2, options.Interpreter), ...
+         tanSymbol(options.Interpreter)}, ...
+        'Location', options.ShiftedLegendLocation, ...
+        'Interpreter', options.Interpreter, ...
+        'FontName', options.FontName, ...
+        'FontSize', options.LegendFontSize, ...
+        'Box', options.LegendBox);
 end
 
-function validateLogLimits(options, xScale, primaryScale, secondaryScale, hasSecondary)
-    if strcmp(xScale, 'log') && ...
-            ((~isempty(options.XLim) && any(options.XLim <= 0)) || ...
-             (~isempty(options.XTicks) && any(options.XTicks <= 0)))
-        error('dmaPlot:InvalidLogXAxis', ...
-            'XLim and XTicks must be positive for a logarithmic x-axis.');
-    end
+function legendHandle = fitLegend(ax, options)
+    yyaxis(ax, 'left');
+    filtered = plot(ax, nan, nan, ...
+        'LineStyle', 'none', ...
+        'Marker', options.FilteredMarker, ...
+        'MarkerSize', options.FilteredMarkerSize, ...
+        'LineWidth', options.FilteredMarkerLineWidth, ...
+        'Color', [0 0 0]);
+    maxwell = plot(ax, nan, nan, 'k-', ...
+        'LineWidth', options.MaxwellLineWidth);
 
-    if strcmp(primaryScale, 'log') && ...
-            ((~isempty(options.YLim) && any(options.YLim <= 0)) || ...
-             (~isempty(options.YTicks) && any(options.YTicks <= 0)))
-        error('dmaPlot:InvalidLogYAxis', ...
-            'YLim and YTicks must be positive for a logarithmic primary y-axis.');
-    end
+    legendHandle = legend(ax, [filtered, maxwell], ...
+        {'Filtered master curve', 'Maxwell fit'}, ...
+        'Location', options.FitLegendLocation, ...
+        'Interpreter', options.Interpreter, ...
+        'FontName', options.FontName, ...
+        'FontSize', options.LegendFontSize, ...
+        'Box', options.LegendBox);
+end
 
-    if hasSecondary && strcmp(secondaryScale, 'log') && ...
-            ((~isempty(options.SecondaryYLim) && any(options.SecondaryYLim <= 0)) || ...
-             (~isempty(options.SecondaryYTicks) && any(options.SecondaryYTicks <= 0)))
-        error('dmaPlot:InvalidLogYAxis', ...
-            ['SecondaryYLim and SecondaryYTicks must be positive for a ', ...
-             'logarithmic secondary y-axis.']);
-    end
+function plotResponse(ax, x, y, lineStyle, color, marker, markerSize, ...
+    lineWidth, xScale, yScale)
+
+    valid = isfinite(x) & isfinite(y);
+    if strcmp(xScale, 'log'), valid = valid & x > 0; end
+    if strcmp(yScale, 'log'), valid = valid & y > 0; end
+    plot(ax, x(valid), y(valid), ...
+        'LineStyle', lineStyle, ...
+        'Marker', marker, ...
+        'MarkerSize', markerSize, ...
+        'LineWidth', lineWidth, ...
+        'Color', color, ...
+        'HandleVisibility', 'off');
 end
 
 function prepareAxes(ax, xScale, yScale, options)
@@ -491,260 +489,81 @@ function prepareAxes(ax, xScale, yScale, options)
     box(ax, options.Box);
 end
 
-function handles = plotResponses(ax, data, xName, names, ...
-    groupIndex, groupValues, groupColors, groupName, options, ...
-    useTemperatureColorbar, responseOffset, totalResponses)
-
-    handles = gobjects(0,1);
-    for g = 1:numel(groupValues)
-        rows                    = groupIndex == g;
-        [x, order]              = sort(data.(xName)(rows));
-        rowIndices              = find(rows);
-        rowIndices              = rowIndices(order);
-
-        for j = 1:numel(names)
-            responseNumber      = responseOffset + j;
-            y                   = data.(names{j})(rowIndices);
-            valid               = isfinite(x) & isfinite(y);
-
-            if strcmp(ax.XScale, 'log')
-                valid   = valid & x > 0;
-            end
-            if strcmp(ax.YScale, 'log')
-                valid   = valid & y > 0;
-            end
-            if ~any(valid)
-                continue
-            end
-
-            if useTemperatureColorbar || numel(groupValues) > 1
-                color   = groupColors(g,:);
-            else
-                colorIndex  = 1 + mod(responseNumber-1, size(options.ResponseColors,1));
-                color       = options.ResponseColors(colorIndex,:);
-            end
-
-            styleIndex  = 1 + mod(responseNumber-1, numel(options.ResponseLineStyles));
-            style       = options.ResponseLineStyles{styleIndex};
-            label       = makeDisplayLabel(data, rowIndices, groupName, ...
-                groupValues(g), names{j}, options, totalResponses);
-
-            handle = plot(ax, x(valid), y(valid), ...
-                'LineStyle', style, ...
-                'Marker', options.Marker, ...
-                'MarkerSize', options.MarkerSize, ...
-                'Color', color, ...
-                'LineWidth', options.LineWidth, ...
-                'DisplayName', label);
-
-            if useTemperatureColorbar
-                handle.HandleVisibility = 'off';
-            end
-            handles(end+1,1) = handle; %#ok<AGROW>
-        end
-    end
+function applyAxisWindow(ax, xLimits, xTicks, yLimits, yTicks)
+    applyWindow(ax, 'x', xLimits, xTicks);
+    applyWindow(ax, 'y', yLimits, yTicks);
 end
 
-function applyXWindow(ax, limits, ticks)
-    if ~isempty(limits)
-        xlim(ax, limits);
-    end
-    if ~isempty(ticks)
-        ax.XTick = ticks;
-    end
-end
-
-function applyYWindow(ax, limits, ticks)
-    if ~isempty(limits)
-        ylim(ax, limits);
-    end
-    if ~isempty(ticks)
-        ax.YTick = ticks;
-    end
-end
-
-function legendHandle = makeLegend(ax, primaryHandles, secondaryHandles, ...
-    primaryNames, secondaryNames, options, useTemperatureColorbar)
-
-    legendHandle    = gobjects(0);
-    if strcmp(options.ShowLegend, 'off')
-        legend(ax, 'off');
-        return
-    end
-
-    names       = [primaryNames, secondaryNames];
-    dataHandles = [primaryHandles; secondaryHandles];
-
-    if useTemperatureColorbar
-        if isscalar(names)
-            legend(ax, 'off');
-            return
-        end
-
-        legendHandles   = gobjects(numel(names), 1);
-        labels          = cell(numel(names), 1);
-        for i = 1:numel(names)
-            styleIndex      = 1 + mod(i-1, numel(options.ResponseLineStyles));
-            legendHandles(i) = plot(ax, nan, nan, ...
-                'LineStyle', options.ResponseLineStyles{styleIndex}, ...
-                'Color', [0.15 0.15 0.15], ...
-                'LineWidth', options.LineWidth, ...
-                'DisplayName', responseSymbol(names{i}, options, ...
-                    options.Interpreter));
-            labels{i}       = legendHandles(i).DisplayName;
-        end
+function applyWindow(ax, axisName, limits, ticks)
+    if strcmp(axisName, 'x')
+        if ~isempty(limits), xlim(ax, limits); end
+        if ~isempty(ticks), ax.XTick = ticks; end
     else
-        legendHandles   = dataHandles;
-        labels          = get(legendHandles, {'DisplayName'});
+        if ~isempty(limits), ylim(ax, limits); end
+        if ~isempty(ticks), ax.YTick = ticks; end
     end
+end
 
-    if isempty(legendHandles)
-        return
-    end
-
-    legendHandle = legend(ax, legendHandles, labels, ...
-        'Location', options.LegendLocation, ...
-        'Interpreter', options.Interpreter);
-    set(legendHandle, ...
+function args = labelArguments(options)
+    args = {'Interpreter', options.Interpreter, ...
         'FontName', options.FontName, ...
-        'FontSize', options.LegendFontSize, ...
-        'Box', options.LegendBox);
+        'FontSize', options.AxisLabelFontSize};
 end
 
-function label = makeDisplayLabel(data, rows, groupName, groupValue, ...
-    yName, options, totalResponses)
-
-    responseLabel   = responseSymbol(yName, options, options.Interpreter);
-    if isempty(groupName)
-        label   = responseLabel;
-        return
-    end
-
-    groupLabel  = makeGroupLabel(data, rows, groupName, groupValue, ...
-        options.Interpreter);
-    if totalResponses > 1
-        label   = sprintf('%s, %s', groupLabel, responseLabel);
-    else
-        label   = groupLabel;
-    end
-end
-
-function label = makeGroupLabel(data, rows, groupName, groupValue, interpreter)
-    if strcmp(groupName, 'Set') && ...
-            ismember('Temperature_C', data.Properties.VariableNames)
-        temperature = mean(data.Temperature_C(rows), 'omitnan');
-        label       = formatTemperature(temperature, interpreter);
-    elseif strcmp(groupName, 'Temperature_C')
-        label       = formatTemperature(groupValue, interpreter);
-    elseif strcmp(groupName, 'Frequency_Hz')
-        if strcmp(interpreter, 'latex')
-            label   = ['$', num2str(groupValue, '%.3g'), '\,\mathrm{Hz}$'];
-        else
-            label   = sprintf('%.3g Hz', groupValue);
-        end
-    elseif isnumeric(groupValue)
-        label       = sprintf('%s = %g', groupName, groupValue);
-    else
-        label       = sprintf('%s = %s', groupName, char(string(groupValue)));
-    end
-end
-
-function label = formatTemperature(temperature, interpreter)
-    switch interpreter
-        case 'latex'
-            label   = ['$', num2str(temperature, '%.3g'), ...
-                       '\,^{\circ}\mathrm{C}$'];
-        case 'tex'
-            label   = [num2str(temperature, '%.3g'), ' ^{\circ}C'];
+function label = responseAxisLabel(name, options)
+    switch name
+        case 'StorageModulus'
+            label = sprintf('Storage modulus, %s (%s)', ...
+                modulusSymbol(options.ModulusType, 1, options.Interpreter), ...
+                options.ModulusUnit);
+        case 'LossModulus'
+            label = sprintf('Loss modulus, %s (%s)', ...
+                modulusSymbol(options.ModulusType, 2, options.Interpreter), ...
+                options.ModulusUnit);
         otherwise
-            label   = sprintf('%.3g deg C', temperature);
+            label = lossFactorLabel(options.Interpreter);
     end
 end
 
-function label = makeAxisLabel(names, options)
-    if isempty(names)
-        label = '';
-        return
-    end
-
-    hasStorage      = any(ismember(names, ...
-        {'StorageModulus', 'StorageModulusFiltered'}));
-    hasLoss         = any(ismember(names, ...
-        {'LossModulus', 'LossModulusFiltered'}));
-    hasRelaxation   = any(strcmp(names, 'RelaxationModulus'));
-    hasLossFactor   = any(ismember(names, {'TanDelta', 'TanDeltaFiltered'}));
-
-    labels = {};
-    if hasStorage && hasLoss
-        labels{end+1} = sprintf('Storage and loss moduli, %s, %s', ...
-            modulusSymbol(options.ModulusType, 1, options.Interpreter), ...
-            modulusSymbol(options.ModulusType, 2, options.Interpreter));
-    elseif hasStorage
-        labels{end+1} = sprintf('Storage modulus, %s', ...
-            modulusSymbol(options.ModulusType, 1, options.Interpreter));
-    elseif hasLoss
-        labels{end+1} = sprintf('Loss modulus, %s', ...
-            modulusSymbol(options.ModulusType, 2, options.Interpreter));
-    elseif hasRelaxation
-        labels{end+1} = sprintf('Relaxation modulus, %s', ...
-            responseSymbol('RelaxationModulus', options, ...
-                options.Interpreter));
-    end
-
-    hasModulus = hasStorage || hasLoss || hasRelaxation;
-    if hasModulus && ~isempty(options.ModulusUnit)
-        labels{end} = sprintf('%s (%s)', labels{end}, options.ModulusUnit);
-    end
-
-    if hasLossFactor
-        labels{end+1} = sprintf('Loss factor, %s', ...
-            responseSymbol('TanDelta', options, options.Interpreter));
-    end
-
-    knownNames = {'StorageModulus', 'StorageModulusFiltered', ...
-                  'LossModulus', 'LossModulusFiltered', ...
-                  'RelaxationModulus', 'TanDelta', 'TanDeltaFiltered'};
-    otherNames = names(~ismember(names, knownNames));
-    for i = 1:numel(otherNames)
-        labels{end+1} = displayName(otherNames{i}, options.Interpreter); %#ok<AGROW>
-    end
-
-    label = strjoin(labels, '; ');
+function label = combinedModulusLabel(options)
+    label = sprintf('Storage and loss moduli, %s, %s (%s)', ...
+        modulusSymbol(options.ModulusType, 1, options.Interpreter), ...
+        modulusSymbol(options.ModulusType, 2, options.Interpreter), ...
+        options.ModulusUnit);
 end
 
-function label = responseSymbol(name, options, interpreter)
-    if any(strcmp(name, {'StorageModulus', 'StorageModulusFiltered'}))
-        label   = modulusSymbol(options.ModulusType, 1, interpreter);
-    elseif any(strcmp(name, {'LossModulus', 'LossModulusFiltered'}))
-        label   = modulusSymbol(options.ModulusType, 2, interpreter);
-    elseif strcmp(name, 'RelaxationModulus')
-        if strcmp(interpreter, 'latex')
-            label   = sprintf('$%s(t)$', options.ModulusType);
-        else
-            label   = sprintf('%s(t)', options.ModulusType);
-        end
-    elseif any(strcmp(name, {'TanDelta', 'TanDeltaFiltered'}))
-        if strcmp(interpreter, 'latex')
-            label   = '$\tan(\delta)$';
-        elseif strcmp(interpreter, 'tex')
-            label   = 'tan(\delta)';
-        else
-            label   = 'tan(delta)';
-        end
-    else
-        label   = displayName(name, interpreter);
-    end
+function label = lossFactorLabel(interpreter)
+    label = sprintf('Loss factor, %s', tanSymbol(interpreter));
 end
 
 function label = modulusSymbol(type, derivative, interpreter)
+    type = upper(char(type));
     if strcmp(interpreter, 'latex')
         if derivative == 1
-            label   = ['$', type, '^{\prime}$'];
+            label = ['$', type, '^{\prime}$'];
         else
-            label   = ['$', type, '^{\prime\prime}$'];
+            label = ['$', type, '^{\prime\prime}$'];
         end
     else
-        label   = [type, repmat(char(39), 1, derivative)];
+        label = [type, repmat(char(39), 1, derivative)];
+    end
+end
+
+function label = tanSymbol(interpreter)
+    if strcmp(interpreter, 'latex')
+        label = '$\tan(\delta)$';
+    elseif strcmp(interpreter, 'tex')
+        label = 'tan(\delta)';
+    else
+        label = 'tan(delta)';
+    end
+end
+
+function label = frequencyLabel(symbol, description, interpreter)
+    if strcmp(interpreter, 'latex')
+        label = sprintf('%s, $%s$ (Hz)', description, symbol);
+    else
+        label = sprintf('%s, %s (Hz)', description, symbol);
     end
 end
 
@@ -758,101 +577,58 @@ function label = temperatureAxisLabel(interpreter)
     end
 end
 
-function name = firstAvailable(data, candidates)
-    name = '';
-    for i = 1:numel(candidates)
-        if ismember(candidates{i}, data.Properties.VariableNames)
-            name = candidates{i};
-            return
-        end
-    end
-end
-
-function label = displayName(name, interpreter)
-% Translate canonical table names into compact axis labels.
-
-    if nargin < 2
-        interpreter = 'none';
-    end
-
-    switch name
-        case 'Frequency_Hz'
-            label   = symbolAxisLabel('Frequency', 'f', 'Hz', interpreter);
-        case 'AngularFrequency_rad_s'
-            label   = symbolAxisLabel('Angular frequency', '\omega', ...
-                'rad/s', interpreter);
-        case 'ShiftedFrequency_Hz'
-            label   = symbolAxisLabel('Shifted frequency', 'f_s', ...
-                'Hz', interpreter);
-        case 'ReducedFrequency_Hz'
-            label   = symbolAxisLabel('Reduced frequency', 'f_r', ...
-                'Hz', interpreter);
-        case 'Temperature_C'
-            label   = temperatureAxisLabel(interpreter);
-        case 'OscillationStrain_pct'
-            label   = 'Oscillation strain (%)';
-        case 'Time_s'
-            label   = symbolAxisLabel('Time', 't', 's', interpreter);
-        otherwise
-            label   = name;
-    end
-end
-
-function label = symbolAxisLabel(description, symbol, unit, interpreter)
+function label = shiftFactorAxisLabel(interpreter)
     if strcmp(interpreter, 'latex')
-        label = sprintf('%s, $%s$ (%s)', description, symbol, unit);
-    elseif strcmp(interpreter, 'none') && strcmp(symbol, '\omega')
-        label = sprintf('%s, omega (%s)', description, unit);
+        label = '$\log_{10}(a_T)$';
+    elseif strcmp(interpreter, 'tex')
+        label = 'log_{10}(a_T)';
     else
-        label = sprintf('%s, %s (%s)', description, symbol, unit);
+        label = 'log10(a_T)';
     end
 end
 
-function value = validateChoice(value, choices, fieldName)
-    if ~isTextScalar(value)
-        error('dmaPlot:InvalidPlotOption', ...
-            'PlotOptions.%s must be text.', fieldName);
-    end
-
-    value = lower(char(value));
-    if ~ismember(value, choices)
-        error('dmaPlot:InvalidPlotOption', ...
-            'Invalid value for PlotOptions.%s.', fieldName);
+function [xScale, yScale] = splitScale(scale)
+    switch lower(char(scale))
+        case 'linear'
+            xScale = 'linear';
+            yScale = 'linear';
+        case 'semilogx'
+            xScale = 'log';
+            yScale = 'linear';
+        case 'semilogy'
+            xScale = 'linear';
+            yScale = 'log';
+        case 'loglog'
+            xScale = 'log';
+            yScale = 'log';
     end
 end
 
-function value = validateLimits(value, fieldName)
-    if ~(isempty(value) || (isnumeric(value) && numel(value) == 2 && ...
-            all(isfinite(value)) && value(1) < value(2)))
-        error('dmaPlot:InvalidPlotOption', ...
-            'PlotOptions.%s must be empty or an increasing two-value vector.', ...
-            fieldName);
-    end
-    value = value(:).';
-end
-
-function value = validateTicks(value, fieldName)
-    if ~(isempty(value) || (isnumeric(value) && isvector(value) && ...
-            all(isfinite(value)) && all(diff(value) > 0)))
-        error('dmaPlot:InvalidPlotOption', ...
-            ['PlotOptions.%s must be empty or a strictly increasing ', ...
-             'finite numeric vector.'], fieldName);
-    end
-    value = value(:).';
-end
-
-function names = normalizeVariableList(input)
-    if isempty(input)
-        names   = {};
-    elseif ischar(input)
-        names   = {input};
+function map = resolveColorMap(input)
+    if isnumeric(input)
+        map     = input;
     else
-        names   = cellstr(input);
+        map     = feval(char(input), 256);
     end
 end
 
-function tf = validVariableList(value)
-    tf = isempty(value) || ischar(value) || isstring(value) || iscellstr(value);
+function handles = initializeHandles(numberOfPlots)
+    handles.Figures     = gobjects(numberOfPlots, 1);
+    handles.Axes        = gobjects(numberOfPlots, 1);
+    handles.Legends     = gobjects(numberOfPlots, 1);
+    handles.Colorbars   = gobjects(numberOfPlots, 1);
+end
+
+function requireTableVariables(data, names)
+    if ~istable(data)
+        error('dmaPlot:InvalidData', 'DMA plot data must be a table.');
+    end
+
+    missing = names(~ismember(names, data.Properties.VariableNames));
+    if ~isempty(missing)
+        error('dmaPlot:MissingVariable', ...
+            'Missing table variable: %s', strjoin(missing, ', '));
+    end
 end
 
 function tf = isTextScalar(value)
